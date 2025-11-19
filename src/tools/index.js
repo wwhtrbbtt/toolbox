@@ -1,41 +1,9 @@
 import js_beautify from "js-beautify";
 import deobfuscate from "./deobfuscate";
 import ToolType from "./types";
-import LZString from "lz-string";
 import tlsConverter from "./tlsConverter";
-
-function extractKey(script) {
-  try {
-    const split = script.match(/querySelector(.)/)[1];
-    const regex = new RegExp(`\\${split}([a-zA-Z0-9\\+\\-\\$]{65})\\${split}`, "i");
-    const key = script.match(regex)[1];
-    console.log("Key:", key);
-    return key;
-  } catch {
-    throw new Error("Could not parse key");
-  }
-}
-
-function getBaseValue(alphabet, character) {
-  var baseReverseDic = {};
-  if (!baseReverseDic[alphabet]) {
-    baseReverseDic[alphabet] = {};
-    for (var i = 0; i < alphabet.length; i++) {
-      baseReverseDic[alphabet][alphabet.charAt(i)] = i;
-    }
-  }
-  return baseReverseDic[alphabet][character];
-}
-
-const LZ = {
-  compress: (input, key) => {
-    return LZString._compress(input, 6, (a) => key.charAt(a));
-  },
-  decompress: (input, key) => {
-    input = input.replace(/ /g, "+");
-    return LZString._decompress(input.length, 32, (index) => getBaseValue(key, input.charAt(index)));
-  },
-};
+import aes from "./aes";
+import charles from "./charles";
 
 const headerToCode = (i) =>
   JSON.stringify(
@@ -47,70 +15,6 @@ const headerToCode = (i) =>
     null,
     "\t"
   );
-
-const DEFAULT_KEY = [48, 174, 137, 138, 134, 125, 45, 5, 20, 156, 233, 94, 133, 192, 55, 42, 196, 197, 155, 237, 108, 44, 168, 232, 89, 152, 138, 44, 21, 60, 197, 150];
-function getKey(customKeyInput) {
-  if (!customKeyInput) return new Uint8Array(DEFAULT_KEY);
-  const keyArray = customKeyInput.split(",").map((s) => parseInt(s.trim()));
-  if (keyArray.length !== 32) {
-    throw new Error("Key must be exactly 32 bytes");
-  }
-  if (keyArray.some((b) => isNaN(b) || b < 0 || b > 255)) {
-    throw new Error("All key bytes must be integers between 0 and 255");
-  }
-  return new Uint8Array(keyArray);
-}
-
-function formatAndSort(input) {
-  try {
-    const parsed = JSON.parse(input);
-
-    try {
-      if (Array.isArray(parsed?.events)) parsed.events = parsed.events.sort((a, b) => a[0] - b[0]);
-    } catch {}
-
-    return JSON.stringify(parsed, null, 2);
-  } catch (e) {
-    console.log(e)
-    // If it's not valid JSON, return the input as-is
-    return input;
-  }
-}
-
-async function AESGCMencryptData(plaintext, config) {
-  const key = getKey(config.key);
-  if (!key) return;
-
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["encrypt"]);
-
-  const encoded = new TextEncoder().encode(plaintext);
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, cryptoKey, encoded);
-
-  const encryptedArray = new Uint8Array(encrypted);
-  const result = new Uint8Array(encryptedArray.length + iv.length + 1);
-  result.set(encryptedArray, 0);
-  result.set(iv, encryptedArray.length);
-  result[result.length - 1] = 0;
-
-  const base64Result = btoa(String.fromCharCode(...result));
-  return base64Result;
-}
-
-async function AESGCMdecryptData(encryptedInput, config) {
-  const key = getKey(config.key);
-  const encryptedData = Uint8Array.from(atob(encryptedInput), (c) => c.charCodeAt(0));
-  const iv = encryptedData.slice(-13, -1);
-  const tag = encryptedData.slice(-29, -13);
-  const ciphertext = encryptedData.slice(0, -29);
-  const combinedData = new Uint8Array(ciphertext.length + tag.length);
-  combinedData.set(ciphertext, 0);
-  combinedData.set(tag, ciphertext.length);
-  const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["decrypt"]);
-  const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, cryptoKey, combinedData);
-  const decryptedText = new TextDecoder().decode(decrypted);
-  return formatAndSort(decryptedText);
-}
 
 const tools = [
   {
@@ -214,6 +118,20 @@ const tools = [
     placeholder: `GET  /tools/header_formatter HTTP/1.1\nHost: tools.peet.ws\nHello: World!`,
     type: ToolType.GENERAL,
   },
+  {
+    name: "charles_binary_parser",
+    title: "Charles binary parser",
+    subtitle: "An utility for converting the 'binary' response data from charles proxy to actual binary",
+    similar: ["uuid_analyzer", "jwt_decoder", "js_formatter", "header_formatter_fhttp"],
+    func: charles.parseBinary,
+    placeholder: `00000000  7e d1 5d 7e 7e f3 d8 c3 16 20 f3 e2 fa 4d 8d 6b   ~ ]~~        M k
+00000010  e3 77 0d 2c 4a bc d0 7f 76 7b 3c b9 66 a5 5c 4f    w ,J  v{< f \O!`,
+    type: ToolType.GENERAL,
+    config: [
+      { title: "Seperate with commas", name: "commas", val: true },
+      { title: "Use 0xXX syntax", name: "zerox", val: true },
+    ],
+  },
 
   // == ANTBOT RELATED ==
   {
@@ -258,7 +176,7 @@ const tools = [
     title: "AES-GCM Encrypt",
     subtitle: "An utility that can encrypt using AES-GCM with a custom key. Used by some antibots, which like to sue you if you mention them.",
     similar: ["aes-gcm-decrypt"],
-    func: AESGCMencryptData,
+    func: aes.AESGCMencryptData,
     config: [{ title: "Decryption key", name: "key", val: "48, 174, 137, 138, 134, 125, 45, 5, 20, 156, 233, 94, 133, 192, 55, 42,196, 197, 155, 237, 108, 44, 168, 232, 89, 152, 138, 44, 21, 60, 197, 150" }],
     placeholder: `Input data to get started`,
     type: ToolType.ANTIBOT,
@@ -268,67 +186,14 @@ const tools = [
     title: "AES-GCM Decrypt",
     subtitle: "An utility that can decrypt using AES-GCM with a custom key. Used by some antibots, which like to sue you if you mention them.",
     similar: ["aes-gcm-encrypt"],
-    func: AESGCMdecryptData,
-    config: [{ title: "Encryption key", name: "key", val: "48, 174, 137, 138, 134, 125, 45, 5, 20, 156, 233, 94, 133, 192, 55, 42,196, 197, 155, 237, 108, 44, 168, 232, 89, 152, 138, 44, 21, 60, 197, 150" }],
+    func: aes.AESGCMdecryptData,
+    config: [
+      { title: "Encryption key", name: "key", val: "48, 174, 137, 138, 134, 125, 45, 5, 20, 156, 233, 94, 133, 192, 55, 42,196, 197, 155, 237, 108, 44, 168, 232, 89, 152, 138, 44, 21, 60, 197, 150" },
+      { title: "Format & Sort", name: "format", val: false },
+    ],
     placeholder: `Input data to get started`,
     type: ToolType.ANTIBOT,
   },
-  // {
-  //   name: "px_encoder",
-  //   title: "PerimeterX encoder",
-  //   subtitle: "Encode PerimeterX/HUMAN payloads using your custom key",
-  //   similar: ["px_decoder"],
-  //   type: ToolType.ANTIBOT,
-  // },
-  // {
-  //   name: "px_decoder",
-  //   title: "PerimeterX decoder",
-  //   subtitle: "Decode PerimeterX/HUMAN payloads using your custom key",
-  //   similar: ["px_encoder"],
-  //   type: ToolType.ANTIBOT,
-  // },
-  // {
-  //   name: "cf_encoder",
-  //   title: "Cloudflare encoder",
-  //   subtitle: "Encode Cloudflare payloads using your custom key (lz-encrypt)",
-  //   similar: ["cf_decoder"],
-  //   config: [{ title: "Encryption key or script", name: "key", val: "" }],
-  //   type: ToolType.ANTIBOT,
-  //   func: (payload, cnfg = {}) => {
-  //     let key = cnfg.key.length === 65 ? cnfg.key : extractKey(cnfg.key);
-  //     const res = LZ.compress(JSON.stringify(JSON.parse(payload)), key);
-  //     if (!res) return "Invalid key for payload";
-  //     return res;
-  //   },
-  // },
-  // {
-  //   name: "cf_decoder",
-  //   title: "Cloudflare decoder",
-  //   subtitle: "Decode Cloudflare payloads using a custom key (lz-encrypt)",
-  //   similar: ["cf_encoder"],
-  //   type: ToolType.ANTIBOT,
-  //   config: [{ title: "Encryption key or script", name: "key", val: "" }],
-  //   func: (rawPayload, cnfg = {}) => {
-  //     let key;
-  //     try {
-  //       key = cnfg.key.length === 65 ? cnfg.key : extractKey(cnfg.key);
-  //     } catch {
-  //       return "Could not parse key";
-  //     }
-  //     try {
-  //       let payload = rawPayload;
-  //       try {
-  //         payload = rawPayload.split("=")[1].replaceAll("%2b", "+").replaceAll(" ", "+");
-  //       } catch {}
-
-  //       const res = LZ.decompress(payload, key);
-  //       if (!res) return "Invalid key for payload";
-  //       return JSON.stringify(JSON.parse(res), null, "\t");
-  //     } catch {
-  //       return `Parsed key as ${key} but could not decode payload`;
-  //     }
-  //   },
-  // },
   {
     name: "tls_converter",
     title: "JSON to uTLS",
