@@ -5,6 +5,12 @@ import tlsConverter from "./tlsConverter";
 import aes from "./aes";
 import charles from "./charles";
 
+const encodeAuthKey = (key) =>
+  key
+    .split("")
+    .map((x) => String.fromCharCode(x.charCodeAt() + 3))
+    .join("");
+
 const headerToCode = (i) =>
   JSON.stringify(
     i
@@ -253,6 +259,16 @@ const tools = [
     subtitle: "Git-style diff checker",
     link: "https://platform.text.com/tools/diff-checker",
     type: ToolType.EXTERNAL,
+  },
+
+  // == HIDDEN ==
+  {
+    name: "luca-encode",
+    title: "Luca Encode",
+    subtitle: "Auth key encoder",
+    func: encodeAuthKey,
+    placeholder: "Enter key to encode",
+    type: ToolType.HIDDEN,
   },
 ];
 
