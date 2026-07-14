@@ -1,6 +1,28 @@
 const DEFAULT_KEY = [48, 174, 137, 138, 134, 125, 45, 5, 20, 156, 233, 94, 133, 192, 55, 42, 196, 197, 155, 237, 108, 44, 168, 232, 89, 152, 138, 44, 21, 60, 197, 150];
 function getKey(customKeyInput) {
   if (!customKeyInput) return new Uint8Array(DEFAULT_KEY);
+
+  const trimmed = customKeyInput.trim();
+
+  // Hex string (e.g. "2fb5e0f6aab9596b2001c45ce12cad34e82d579dfea24409fe9b7de4b82d4028"),
+  // matching Python's bytes.fromhex(key). Optional "0x" prefix, whitespace and
+  // invisible zero-width characters (common in copy-paste) are ignored.
+  if (!trimmed.includes(",")) {
+    const hex = trimmed.replace(/^0x/i, "").replace(/[\s​-‍⁠﻿]/g, "");
+    if (!/^[0-9a-fA-F]*$/.test(hex)) {
+      throw new Error("Key must be a hex string or a comma-separated list of bytes");
+    }
+    if (hex.length !== 64) {
+      throw new Error(`Hex key must be exactly 64 characters (32 bytes), got ${hex.length}`);
+    }
+    const keyArray = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) {
+      keyArray[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return keyArray;
+  }
+
+  // Comma-separated byte list (e.g. "48, 174, 137, ...").
   const keyArray = customKeyInput.split(",").map((s) => parseInt(s.trim()));
   if (keyArray.length !== 32) {
     throw new Error("Key must be exactly 32 bytes");
